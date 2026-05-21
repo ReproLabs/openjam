@@ -1,0 +1,95 @@
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.iml
+.project
+.classpath
+.settings/
+.factorypath
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- Node / Frontend / Extension ----------
+node_modules/
+dist/
+build/
+.next/
+.cache/
+.parcel-cache/
+.vite/
+.turbo/
+coverage/
+*.tsbuildinfo
+
+# Package manager artifacts
+.pnpm-store/
+.yarn/
+.yarn-integrity
+
+# ---------- Java / Spring Boot ----------
+target/
+*.class
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+replay_pid*
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+!.mvn/wrapper/maven-wrapper.properties
+
+# Gradle (in case anyone uses it)
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+
+# Spring Boot
+HELP.md
+application-local.yml
+application-local.properties
+
+# ---------- Docker ----------
+docker-compose.override.yml
+
+# ---------- Storage / Uploads (local dev) ----------
+uploads/
+storage/
+minio-data/
+postgres-data/
+
+# ---------- Test artifacts ----------
+.nyc_output/
+junit.xml
+test-results/
+playwright-report/
+.playwright/
+
+# ---------- Misc ----------
+*.tgz
+.eslintcache
+.stylelintcache
