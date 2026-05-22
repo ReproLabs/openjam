@@ -5,7 +5,14 @@ export default defineConfig({
   manifest: {
     name: "OpenJam",
     description: "Record, edit, and replay bug captures — local-first.",
-    permissions: ["activeTab", "tabCapture", "storage", "webRequest", "tabs"],
+    permissions: [
+      "activeTab",
+      "tabCapture",
+      "storage",
+      "webRequest",
+      "tabs",
+      "offscreen",
+    ],
     host_permissions: ["<all_urls>"],
     action: {
       default_title: "OpenJam",

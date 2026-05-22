@@ -1,63 +1,175 @@
 import type { CaptureEvent, NetworkEvent } from "@/lib/types";
 
-interface RecorderSession {
-  tabId: number;
-  sourceTabId: number | null;
+interface RecordingSession {
+  sourceTabId: number;
+  sourceUrl: string;
   startedAt: number;
 }
+
+const OFFSCREEN_PATH = "/offscreen.html";
 
 export default defineBackground(() => {
   console.log("OpenJam background worker started.");
 
-  let session: RecorderSession | null = null;
+  let session: RecordingSession | null = null;
   const pendingRequests = new Map<string, NetworkEvent>();
 
-  chrome.runtime.onMessage.addListener((msg, sender) => {
+  async function ensureOffscreen() {
+    const url = chrome.runtime.getURL(OFFSCREEN_PATH);
+    const existing = await chrome.offscreen.hasDocument?.();
+    if (existing) return;
+    await chrome.offscreen.createDocument({
+      url,
+      reasons: ["USER_MEDIA" as chrome.offscreen.Reason],
+      justification: "Recording the active tab via MediaRecorder.",
+    });
+  }
+
+  async function closeOffscreen() {
+    const has = await chrome.offscreen.hasDocument?.();
+    if (has) await chrome.offscreen.closeDocument();
+  }
+
+  async function startRecording(opts: {
+    tabAudio: boolean;
+    mic: boolean;
+  }): Promise<{ ok: true } | { ok: false; error: string }> {
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (!tab?.id || !tab.url) {
+        return { ok: false, error: "No active tab to record." };
+      }
+
+      const streamId = await new Promise<string>((resolve, reject) => {
+        chrome.tabCapture.getMediaStreamId(
+          { targetTabId: tab.id },
+          (id) => {
+            const err = chrome.runtime.lastError;
+            if (err || !id) reject(new Error(err?.message ?? "no stream id"));
+            else resolve(id);
+          },
+        );
+      });
+
+      await ensureOffscreen();
+
+      const startedAt = Date.now();
+      session = {
+        sourceTabId: tab.id,
+        sourceUrl: tab.url,
+        startedAt,
+      };
+
+      await chrome.runtime.sendMessage({
+        type: "offscreen:start",
+        streamId,
+        mic: opts.mic,
+        tabAudio: opts.tabAudio,
+        sourceUrl: tab.url,
+        sourceTabId: tab.id,
+        startedAt,
+      });
+
+      return { ok: true };
+    } catch (e) {
+      session = null;
+      await closeOffscreen();
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
+  async function stopRecording() {
+    await chrome.runtime.sendMessage({ type: "offscreen:stop" }).catch(() => {});
+  }
+
+  function getStatus() {
+    if (!session) return { recording: false as const };
+    return {
+      recording: true as const,
+      startedAt: session.startedAt,
+      sourceUrl: session.sourceUrl,
+    };
+  }
+
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || typeof msg !== "object") return;
     const m = msg as { type?: string };
 
-    if (m.type === "recorder:started" && sender.tab?.id != null) {
-      const startedAt = (msg as { startedAt?: number }).startedAt ?? Date.now();
-      const url = new URL(sender.url ?? "");
-      const sourceTabIdParam = url.searchParams.get("sourceTabId");
-      session = {
-        tabId: sender.tab.id,
-        sourceTabId: sourceTabIdParam ? Number(sourceTabIdParam) : null,
-        startedAt,
-      };
+    if (m.type === "ui:startRecording") {
+      const opts = (msg as { options: { tabAudio: boolean; mic: boolean } })
+        .options;
+      void startRecording(opts).then(sendResponse);
+      return true;
     }
 
-    if (m.type === "recorder:stopped") {
+    if (m.type === "ui:stopRecording") {
+      void stopRecording().then(() => sendResponse({ ok: true }));
+      return true;
+    }
+
+    if (m.type === "ui:status") {
+      sendResponse(getStatus());
+      return false;
+    }
+
+    if (m.type === "offscreen:saved") {
       session = null;
+      pendingRequests.clear();
+      const jamId = (msg as { jamId: string }).jamId;
+      void closeOffscreen();
+      void chrome.tabs.create({
+        url: chrome.runtime.getURL(`/replay.html?id=${jamId}`),
+      });
+      void chrome.runtime.sendMessage({ type: "ui:saved", jamId }).catch(() => {});
+      return false;
     }
 
-    if (m.type === "capture:event" && session) {
-      const tabId = sender.tab?.id;
-      if (tabId == null || tabId !== session.sourceTabId) return;
-      void chrome.tabs.sendMessage(session.tabId, msg).catch(() => {
-        void chrome.runtime.sendMessage(msg).catch(() => {});
-      });
+    if (m.type === "offscreen:error") {
+      session = null;
+      pendingRequests.clear();
+      void closeOffscreen();
+      const error = (msg as { error: string }).error;
+      void chrome.runtime.sendMessage({ type: "ui:error", error }).catch(() => {});
+      return false;
     }
+
+    if (m.type === "capture:event") {
+      if (!session) return;
+      const tabId = _sender.tab?.id;
+      if (tabId == null || tabId !== session.sourceTabId) return;
+      void chrome.runtime
+        .sendMessage({
+          type: "offscreen:event",
+          event: (msg as { event: CaptureEvent }).event,
+        })
+        .catch(() => {});
+      return false;
+    }
+
+    return false;
   });
 
   chrome.tabs.onRemoved.addListener((tabId) => {
-    if (session && session.tabId === tabId) session = null;
+    if (session && session.sourceTabId === tabId) {
+      void stopRecording();
+    }
   });
 
   const forward = (event: CaptureEvent) => {
     if (!session) return;
-    void chrome.tabs
-      .sendMessage(session.tabId, { type: "capture:event", event })
-      .catch(() => {
-        void chrome.runtime
-          .sendMessage({ type: "capture:event", event })
-          .catch(() => {});
-      });
+    void chrome.runtime
+      .sendMessage({ type: "offscreen:event", event })
+      .catch(() => {});
   };
 
   const shouldTrack = (details: { tabId: number; url: string }) => {
     if (!session) return false;
-    if (session.sourceTabId == null) return false;
     if (details.tabId !== session.sourceTabId) return false;
     if (details.url.startsWith("chrome-extension://")) return false;
     return true;
